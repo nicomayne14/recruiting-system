@@ -10,7 +10,6 @@ Usage:
 """
 
 import sys
-import time
 from pathlib import Path
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
@@ -51,36 +50,15 @@ def main():
         page.goto(HBS_URL, wait_until="domcontentloaded", timeout=30000)
 
         console.print(
-            "\n[yellow]→ Log in and complete MFA in the browser window.[/yellow]\n"
-            "[dim]  The script will wait here until you're logged in.[/dim]\n"
+            "\n[bold yellow]→ In the browser window:[/bold yellow]\n"
+            "  1. Click [bold]Sign In[/bold] (top right of the page)\n"
+            "  2. Enter your HBS email and password\n"
+            "  3. Complete MFA (phone/Duo)\n"
+            "  4. Wait until you can see the [bold]Alumni Directory[/bold] page\n"
         )
 
-        # Wait until the browser reaches the alumni directory page
-        # (i.e. login + MFA is fully complete)
-        console.print("[dim]Waiting for you to complete login…[/dim]")
-        try:
-            page.wait_for_url(
-                "**/alumni.hbs.edu/**",
-                timeout=300_000,   # 5 minutes to complete login + MFA
-            )
-            # Extra check: wait until we're NOT on a login/auth page
-            for _ in range(60):
-                url = page.url.lower()
-                if ("signin" not in url
-                        and "login" not in url
-                        and "microsoftonline" not in url
-                        and "okta" not in url):
-                    break
-                time.sleep(2)
-            else:
-                console.print("[red]Timed out waiting for login — try again.[/red]")
-                browser.close()
-                sys.exit(1)
-
-        except Exception as e:
-            console.print(f"[red]Error while waiting for login: {e}[/red]")
-            browser.close()
-            sys.exit(1)
+        input("  Once you can see the Alumni Directory, press [Enter] here to save your session...")
+        print()
 
         # Save the full browser storage state (cookies + localStorage)
         ctx.storage_state(path=str(SESSION_FILE))
