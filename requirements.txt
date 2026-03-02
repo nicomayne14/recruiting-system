@@ -1,0 +1,30 @@
+# Core
+python-dotenv>=1.0.0
+requests>=2.31.0
+pandas>=2.0.0
+
+# Notion API
+notion-client>=2.2.1
+
+# Browser automation
+playwright>=1.40.0
+
+# AI APIs
+anthropic>=0.20.0
+openai>=1.0.0           # Perplexity uses OpenAI-compatible client
+
+# Gmail
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+google-api-python-client>=2.100.0
+
+# Streamlit dashboard
+streamlit>=1.29.0
+plotly>=5.18.0
+
+# Utilities
+fuzzywuzzy>=0.18.0
+python-Levenshtein>=0.21.0
+rich>=13.0.0             # Beautiful terminal output
+click>=8.1.0             # CLI argument parsing

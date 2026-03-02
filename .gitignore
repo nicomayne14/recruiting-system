@@ -1,0 +1,50 @@
+# ── Secrets & credentials ─────────────────────────────────────────
+.env
+token.json
+credentials.json
+*_token.json
+*.pem
+*.key
+
+# ── Personal data (never commit real recruiting data) ──────────────
+data/bussgang_*.csv
+data/existing_targets/
+templates/pitches/
+# Use data/sample/ and templates/pitches/sample/ instead (see docs/)
+
+# ── Python ────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Playwright ────────────────────────────────────────────────────
+.playwright/
+playwright-report/
+test-results/
+
+# ── OS / Editor ───────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Streamlit ─────────────────────────────────────────────────────
+.streamlit/secrets.toml
+
+# ── Logs ──────────────────────────────────────────────────────────
+*.log
+logs/
