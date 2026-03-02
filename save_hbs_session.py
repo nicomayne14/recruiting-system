@@ -20,7 +20,7 @@ load_dotenv()
 console = Console()
 
 SESSION_FILE = Path(__file__).parent / "hbs_session.json"
-HBS_URL      = "https://www.alumni.hbs.edu/community/Pages/alumni-directory.aspx"
+HBS_URL      = "https://www.alumni.hbs.edu"
 
 
 def main():
