@@ -71,7 +71,7 @@ class NotionHelper:
         )
         return result
 
-    # ── Data source query (v3: data_sources.query) ────────────────────────────
+    # ── Database query (databases.query) ──────────────────────────────────────
 
     def query_database(
         self,
@@ -80,23 +80,25 @@ class NotionHelper:
         sorts: Optional[list] = None,
         page_size: int = 100,
     ) -> list[dict]:
-        """Return ALL pages from a data source, handling pagination."""
+        """Return ALL pages from a database, handling pagination."""
         pages: list[dict] = []
         cursor: Optional[str] = None
 
         while True:
-            params: dict = {"page_size": page_size}
+            kwargs: dict = {
+                "database_id": data_source_id,
+                "page_size": page_size,
+            }
             if filter_:
-                params["filter"] = filter_
+                kwargs["filter"] = filter_
             if sorts:
-                params["sorts"] = sorts
+                kwargs["sorts"] = sorts
             if cursor:
-                params["start_cursor"] = cursor
+                kwargs["start_cursor"] = cursor
 
             result = self._call(
-                self.client.data_sources.query,
-                data_source_id,
-                **params,
+                self.client.databases.query,
+                **kwargs,
             )
             pages.extend(result.get("results", []))
 
@@ -106,13 +108,13 @@ class NotionHelper:
 
         return pages
 
-    # ── Page CRUD (v3: pages.*) ───────────────────────────────────────────────
+    # ── Page CRUD ─────────────────────────────────────────────────────────────
 
     def create_page(self, data_source_id: str, properties: dict) -> dict:
-        """Create a new page (row) in a data source / database."""
+        """Create a new page (row) in a database."""
         result = self._call(
             self.client.pages.create,
-            parent={"data_source_id": data_source_id},
+            parent={"database_id": data_source_id},
             properties=properties,
         )
         return result
