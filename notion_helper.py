@@ -71,7 +71,7 @@ class NotionHelper:
         )
         return result
 
-    # ── Database query (databases.query) ──────────────────────────────────────
+    # ── Database query ─────────────────────────────────────────────────────────
 
     def query_database(
         self,
@@ -96,10 +96,8 @@ class NotionHelper:
             if cursor:
                 kwargs["start_cursor"] = cursor
 
-            result = self._call(
-                self.client.databases.query,
-                **kwargs,
-            )
+            # Call directly — notion-client endpoints can't be passed by reference
+            result = self._direct_call("databases.query", **kwargs)
             pages.extend(result.get("results", []))
 
             if not result.get("has_more"):
@@ -108,29 +106,41 @@ class NotionHelper:
 
         return pages
 
+    def _direct_call(self, endpoint: str, retries: int = 3, **kwargs) -> Any:
+        """Call a Notion endpoint by dotted name with retry logic."""
+        obj = self.client
+        for part in endpoint.split("."):
+            obj = getattr(obj, part)
+        for attempt in range(retries):
+            self._wait()
+            try:
+                return obj(**kwargs)
+            except APIResponseError as e:
+                if e.status in (429, 503) or e.status >= 500:
+                    wait = 2 ** attempt
+                    console.print(f"[yellow]Notion {e.status} — retrying in {wait}s[/yellow]")
+                    time.sleep(wait)
+                else:
+                    raise
+        raise RuntimeError(f"Notion API call failed after {retries} retries")
+
     # ── Page CRUD ─────────────────────────────────────────────────────────────
 
     def create_page(self, data_source_id: str, properties: dict) -> dict:
         """Create a new page (row) in a database."""
-        result = self._call(
-            self.client.pages.create,
+        return self._direct_call(
+            "pages.create",
             parent={"database_id": data_source_id},
             properties=properties,
         )
-        return result
 
     def update_page(self, page_id: str, properties: dict) -> dict:
         """Update properties on an existing page."""
-        result = self._call(
-            self.client.pages.update,
-            page_id=page_id,
-            properties=properties,
-        )
-        return result
+        return self._direct_call("pages.update", page_id=page_id, properties=properties)
 
     def get_page(self, page_id: str) -> dict:
         """Retrieve a single page by ID."""
-        return self._call(self.client.pages.retrieve, page_id=page_id)
+        return self._direct_call("pages.retrieve", page_id=page_id)
 
     # ── Convenience helpers ───────────────────────────────────────────────────
 
