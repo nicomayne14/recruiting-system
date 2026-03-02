@@ -31,10 +31,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from supabase_helper import SupabaseHelper
 from agents.research_contacts import (
     hbs_login,
+    make_context,
     search_alumni_by_company,
     check_second_time_founder,
     push_contact_to_supabase,
     update_company_flags,
+    HBS_ALUMNI_URL,
+    SESSION_FILE,
     REQUEST_DELAY,
 )
 
@@ -170,33 +173,34 @@ def main():
         )
     console.print(preview)
 
-    # ── 2. Open browser, log in once ──────────────────────────────────────────
-    console.print(f"\n[bold]Step 2 — Opening browser & logging in to HBS[/bold]")
+    # ── 2. Open browser, load session ─────────────────────────────────────────
+    console.print(f"\n[bold]Step 2 — Opening browser & connecting to HBS[/bold]")
+
+    if SESSION_FILE.exists():
+        console.print(f"  [green]✓ Found saved session — skipping MFA[/green]")
+    else:
+        console.print(
+            f"  [yellow]⚠ No saved session found.[/yellow]\n"
+            f"  [dim]Run  python save_hbs_session.py  first to save your HBS session.\n"
+            f"  This lets the batch runner skip MFA on every run.[/dim]"
+        )
+        return
 
     results = []
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            headless=headless,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-        )
-        ctx = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 800},
-        )
+        browser, ctx, session_loaded = make_context(pw, headless)
         page = ctx.new_page()
 
-        logged_in = hbs_login(page)
-        if not logged_in:
+        # Confirm the session is still valid
+        page.goto(HBS_ALUMNI_URL, wait_until="domcontentloaded", timeout=30000)
+        if "signin" in page.url.lower() or "login" in page.url.lower() or "microsoftonline" in page.url.lower():
             console.print(
-                "[red]Cannot proceed — HBS login failed.\n"
-                "Check HBS_EMAIL / HBS_PASSWORD in .env[/red]"
+                "[red]Saved session has expired.[/red]\n"
+                "[dim]Run  python save_hbs_session.py  to refresh it, then try again.[/dim]"
             )
             browser.close()
             return
+        console.print("  [green]✓ Session valid — ready to scrape[/green]")
 
         # ── 3. Scrape each company ─────────────────────────────────────────────
         console.print(f"\n[bold]Step 3 — Scraping {len(companies)} companies[/bold]\n")

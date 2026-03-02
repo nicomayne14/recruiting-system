@@ -36,6 +36,7 @@ console = Console()
 
 HBS_ALUMNI_URL   = "https://www.alumni.hbs.edu/community/Pages/alumni-directory.aspx"
 HBS_LOGIN_URL    = "https://www.alumni.hbs.edu"
+SESSION_FILE     = Path(__file__).parent.parent / "hbs_session.json"
 REQUEST_DELAY    = (1.5, 3.5)
 MAX_RESULTS      = 50
 FOUNDER_KEYWORDS = {"founder", "co-founder", "cofounder", "ceo", "chief executive"}
@@ -59,6 +60,38 @@ class AlumContact:
     second_time_founder: bool = False
     prior_companies: list[str] = field(default_factory=list)
     notes: str = ""
+
+
+# ── Session helpers ───────────────────────────────────────────────────────────
+
+def make_context(pw, headless: bool):
+    """
+    Create a browser context. If hbs_session.json exists, load saved cookies
+    (skips login + MFA). Otherwise return a fresh context and require login.
+    Returns (browser, context, session_loaded: bool).
+    """
+    browser = pw.chromium.launch(
+        headless=headless,
+        args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+    )
+    ua = (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+    if SESSION_FILE.exists():
+        ctx = browser.new_context(
+            user_agent=ua,
+            viewport={"width": 1280, "height": 800},
+            storage_state=str(SESSION_FILE),
+        )
+        return browser, ctx, True
+    else:
+        ctx = browser.new_context(
+            user_agent=ua,
+            viewport={"width": 1280, "height": 800},
+        )
+        return browser, ctx, False
 
 
 # ── Browser helpers ───────────────────────────────────────────────────────────
@@ -493,26 +526,32 @@ def main():
     contacts: list[AlumContact] = []
 
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            headless=headless,
-            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
-        )
-        ctx = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 800},
-        )
+        browser, ctx, session_loaded = make_context(pw, headless)
         page = ctx.new_page()
 
         console.print("\n[bold]Step 1 — HBS login[/bold]")
-        logged_in = hbs_login(page)
-        if not logged_in:
-            console.print("[red]Cannot proceed without login. Check HBS_EMAIL / HBS_PASSWORD.[/red]")
-            browser.close()
-            sys.exit(1)
+        if session_loaded:
+            console.print("  [green]✓ Loaded saved session (hbs_session.json) — skipping login[/green]")
+            # Navigate to the directory to confirm session is still valid
+            page.goto(HBS_ALUMNI_URL, wait_until="domcontentloaded", timeout=30000)
+            if "signin" in page.url.lower() or "login" in page.url.lower() or "microsoftonline" in page.url.lower():
+                console.print(
+                    "  [yellow]⚠ Saved session has expired.[/yellow]\n"
+                    "  [dim]Run: python save_hbs_session.py  to refresh it.[/dim]"
+                )
+                browser.close()
+                sys.exit(1)
+        else:
+            console.print(
+                "  [yellow]No saved session found.[/yellow]\n"
+                "  [dim]Tip: run  python save_hbs_session.py  once to save your session\n"
+                "  and avoid MFA prompts in future runs.[/dim]"
+            )
+            logged_in = hbs_login(page)
+            if not logged_in:
+                console.print("[red]Cannot proceed without login. Check HBS_EMAIL / HBS_PASSWORD.[/red]")
+                browser.close()
+                sys.exit(1)
 
         console.print(f"\n[bold]Step 2 — Alumni directory search for '{company}'[/bold]")
         contacts = search_alumni_by_company(page, company)

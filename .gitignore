@@ -5,6 +5,7 @@ credentials.json
 *_token.json
 *.pem
 *.key
+hbs_session.json      # saved browser cookies — never commit
 
 # ── Personal data (never commit real recruiting data) ──────────────
 data/bussgang_*.csv
