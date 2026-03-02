@@ -22,6 +22,33 @@ STAGE_OPTIONS   = ["Seed", "Series A", "Series B", "Series C+", "Unknown"]
 SECTOR_OPTIONS  = ["Mobility", "Marketplace", "Vertical SaaS", "CleanTech",
                    "DataCenters", "AI", "FinTech", "Other"]
 
+# Role fit mapping — based on Nico's BizOps/Strategy positioning
+ROLE_FIT = {
+    "Mobility":      "BizOps / Growth",
+    "Marketplace":   "BizOps / Operations",
+    "Vertical SaaS": "BizOps / Strategy",
+    "DataCenters":   "BizOps / Strategy",
+    "CleanTech":     "BizOps / BD",
+    "AI":            "BizOps / Product",
+    "FinTech":       "BizOps / Finance",
+    "Other":         "BizOps",
+}
+
+def suggest_role(sectors) -> str:
+    """Return the best-fit role label for a company's sector list."""
+    if not sectors or not isinstance(sectors, list):
+        return "BizOps"
+    for s in sectors:
+        if s in ROLE_FIT:
+            return ROLE_FIT[s]
+    return "BizOps"
+
+def fmt_sector(sectors) -> str:
+    """Format a sector array as a readable string."""
+    if not sectors or not isinstance(sectors, list):
+        return "—"
+    return " · ".join(sectors)
+
 @st.cache_resource
 def get_db():
     return SupabaseHelper()
@@ -55,6 +82,7 @@ with st.sidebar:
     status_filter = st.multiselect("Status", STATUS_OPTIONS, default=[])
     tier_filter   = st.multiselect("Outreach Tier", TIER_OPTIONS, default=[])
     stage_filter  = st.multiselect("Stage", STAGE_OPTIONS, default=[])
+    sector_filter = st.multiselect("Sector", SECTOR_OPTIONS, default=[])
     fit_min       = st.slider("Min Fit Score", 0, 10, 5)
     hbs_only      = st.checkbox("HBS Alumni Only", value=False)
     founders_only = st.checkbox("2nd-Time Founders Only", value=False)
@@ -71,6 +99,10 @@ if tier_filter:
     mask &= df["outreach_tier"].isin(tier_filter)
 if stage_filter:
     mask &= df["stage_estimate"].isin(stage_filter)
+if sector_filter and "sector" in df.columns:
+    mask &= df["sector"].apply(
+        lambda s: any(sec in (s or []) for sec in sector_filter)
+    )
 if "fit_score" in df.columns:
     mask &= df["fit_score"].fillna(0) >= fit_min
 if hbs_only and "hbs_alumni_at_company" in df.columns:
@@ -141,6 +173,11 @@ display_cols = ["name", "status", "outreach_tier", "stage_estimate",
 display_cols = [c for c in display_cols if c in df_filtered.columns]
 
 df_display = df_filtered[display_cols].copy()
+
+# Add sector and role fit columns
+df_display["Sector"]    = df_filtered["sector"].apply(fmt_sector)
+df_display["Role Fit"]  = df_filtered["sector"].apply(suggest_role)
+
 df_display = df_display.rename(columns={
     "name":                  "Company",
     "status":                "Status",
@@ -153,13 +190,18 @@ df_display = df_display.rename(columns={
     "website":               "Website",
 })
 
-df_display = df_display.sort_values(["Fit"], ascending=False).reset_index(drop=True)
+df_display = df_display[
+    ["Company", "Sector", "Role Fit", "Status", "Tier", "Stage",
+     "Fit", "HBS Alumni", "2nd Founder", "HQ", "Website"]
+].sort_values("Fit", ascending=False).reset_index(drop=True)
 
 edited = st.data_editor(
     df_display,
     use_container_width=True,
     height=500,
     column_config={
+        "Sector":      st.column_config.TextColumn("Sector",   width="medium"),
+        "Role Fit":    st.column_config.TextColumn("Role Fit", width="medium"),
         "Status":      st.column_config.SelectboxColumn("Status", options=STATUS_OPTIONS, width="medium"),
         "Tier":        st.column_config.SelectboxColumn("Tier",   options=TIER_OPTIONS,   width="medium"),
         "Fit":         st.column_config.NumberColumn("Fit", min_value=0, max_value=10, step=1, width="small"),
@@ -167,7 +209,7 @@ edited = st.data_editor(
         "2nd Founder": st.column_config.CheckboxColumn("2nd Founder", width="small"),
         "Website":     st.column_config.LinkColumn("Website", width="medium"),
     },
-    disabled=["Company", "Stage", "HQ", "Website"],
+    disabled=["Company", "Sector", "Role Fit", "Stage", "HQ", "Website"],
 )
 
 # ── Detect and save inline edits ──────────────────────────────────────────────
