@@ -1,11 +1,11 @@
 """
 agents/filter_companies.py — Agent 1
 Loads all CSVs, applies stage heuristic + fit score, filters qualified companies,
-and pushes them to the Notion Companies database.
+and pushes them to the Supabase companies table.
 
 Usage:
     python agents/filter_companies.py
-    python agents/filter_companies.py --dry-run   # preview without writing to Notion
+    python agents/filter_companies.py --dry-run   # preview without writing to Supabase
 """
 
 import os
@@ -24,7 +24,7 @@ from rich.table import Table
 
 # Allow running from repo root or agents/ dir
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from notion_helper import NotionHelper
+from supabase_helper import SupabaseHelper
 
 load_dotenv()
 console = Console()
@@ -89,14 +89,16 @@ def calculate_fit_score(sector: str, stage_estimate: str, hq_region: str) -> int
     return min(score, 10)
 
 
-def map_sector_to_notion(sector: str) -> list[str]:
-    """Map raw CSV sector string to valid Notion multi-select options."""
-    notion_options = ["Mobility", "Marketplace", "Vertical SaaS", "CleanTech",
-                      "DataCenters", "AI", "FinTech", "Other"]
+def normalize_sector(sector: str) -> list[str]:
+    """Map raw CSV sector string to canonical sector tags."""
     sector_map = {
         "saas": "Vertical SaaS",
         "vertical saas": "Vertical SaaS",
+        "vertical_saas": "Vertical SaaS",
         "marketplace": "Marketplace",
+        "b2b marketplace": "Marketplace",
+        "b2b_marketplace": "Marketplace",
+        "ecommerce": "Marketplace",
         "mobility": "Mobility",
         "cleantech": "CleanTech",
         "clean tech": "CleanTech",
@@ -109,12 +111,8 @@ def map_sector_to_notion(sector: str) -> list[str]:
         "artificial intelligence": "AI",
         "fintech": "FinTech",
         "financial": "FinTech",
-        "b2b marketplace": "Marketplace",
-        "b2b_marketplace": "Marketplace",
-        "ecommerce": "Marketplace",
         "manufacturing saas": "Vertical SaaS",
         "manufacturing": "Vertical SaaS",
-        "vertical_saas": "Vertical SaaS",
         "agtech": "Vertical SaaS",
         "healthtech": "Other",
         "health tech": "Other",
@@ -122,15 +120,11 @@ def map_sector_to_notion(sector: str) -> list[str]:
         "robotics": "Other",
     }
     s_lower = str(sector).lower().strip()
-    # Try direct map first
     if s_lower in sector_map:
-        mapped = sector_map[s_lower]
-        return [mapped]
-    # Try partial match
+        return [sector_map[s_lower]]
     for key, val in sector_map.items():
         if key in s_lower:
             return [val]
-    # Fall back to "Other" if nothing matches
     return ["Other"]
 
 
@@ -140,7 +134,6 @@ def load_bussgang_csv(path: str, source_label: str, region_default: str) -> pd.D
     """Load a Bussgang CSV (USA has 'Name', others have 'Company Name')."""
     df = pd.read_csv(path, encoding="utf-8-sig")
 
-    # Normalize column name differences
     col_map = {}
     cols_lower = {c.lower(): c for c in df.columns}
     if "name" in cols_lower and "company name" not in cols_lower:
@@ -160,8 +153,14 @@ def load_bussgang_csv(path: str, source_label: str, region_default: str) -> pd.D
     df["Source"] = source_label
     df["_region_hint"] = region_default
     df["_from_existing"] = False
+    for col in ["Company", "Website", "Sector", "Description",
+                "Year Founded", "Total Funding ($M)", "HQ City"]:
+        if col not in df.columns:
+            df[col] = ""
+    df["_pre_fit_score"] = None
     return df[["Company", "Website", "Sector", "Description", "Year Founded",
-               "Total Funding ($M)", "HQ City", "Source", "_region_hint", "_from_existing"]]
+               "Total Funding ($M)", "HQ City", "Source", "_region_hint",
+               "_from_existing", "_pre_fit_score"]]
 
 
 def load_existing_targets_csv(path: str) -> pd.DataFrame:
@@ -170,41 +169,35 @@ def load_existing_targets_csv(path: str) -> pd.DataFrame:
     cols_lower = {c.lower(): c for c in df.columns}
 
     col_map = {}
-    # Company name
     for cname in ["company", "name", "company name"]:
         if cname in cols_lower:
             col_map[cols_lower[cname]] = "Company"
             break
-    # Website
     for cname in ["website", "website url"]:
         if cname in cols_lower:
             col_map[cols_lower[cname]] = "Website"
             break
-    # Sector / Vertical
     for cname in ["sector", "vertical", "business_model"]:
         if cname in cols_lower:
             col_map[cols_lower[cname]] = "Sector"
             break
-    # Description
     for cname in ["description", "why_relevant", "notes"]:
         if cname in cols_lower:
             col_map[cols_lower[cname]] = "Description"
             break
-    # Funding
     for cname in ["total_funding", "funding", "total funding ($m)"]:
         if cname in cols_lower:
             col_map[cols_lower[cname]] = "Total Funding ($M)"
             break
-    # HQ
     for cname in ["hq", "hq city", "location"]:
         if cname in cols_lower:
             col_map[cols_lower[cname]] = "HQ City"
             break
-    # Pre-computed fit score
-    pre_score = None
+
+    pre_score_col = None
     for cname in ["fit_score", "fit score"]:
         if cname in cols_lower:
-            pre_score = cols_lower[cname]
+            pre_score_col = cols_lower[cname]
             break
 
     df = df.rename(columns=col_map)
@@ -212,17 +205,13 @@ def load_existing_targets_csv(path: str) -> pd.DataFrame:
     df["_region_hint"] = "detect"
     df["_from_existing"] = True
 
-    required = ["Company", "Website", "Sector", "Description", "Total Funding ($M)", "HQ City"]
-    for col in required:
+    for col in ["Company", "Website", "Sector", "Description", "Total Funding ($M)", "HQ City"]:
         if col not in df.columns:
             df[col] = ""
     if "Year Founded" not in df.columns:
         df["Year Founded"] = None
-    if pre_score and pre_score in df.columns:
-        df["_pre_fit_score"] = df[pre_score]
-    else:
-        df["_pre_fit_score"] = None
 
+    df["_pre_fit_score"] = df[pre_score_col] if pre_score_col else None
     return df[["Company", "Website", "Sector", "Description", "Year Founded",
                "Total Funding ($M)", "HQ City", "Source", "_region_hint",
                "_from_existing", "_pre_fit_score"]]
@@ -242,7 +231,6 @@ def load_all_csvs(data_dir: str) -> pd.DataFrame:
         path = os.path.join(data_dir, filename)
         if os.path.exists(path):
             df = load_bussgang_csv(path, label, region)
-            df["_pre_fit_score"] = None
             frames.append(df)
             console.print(f"  [dim]Loaded {len(df)} rows from {filename}[/dim]")
         else:
@@ -304,7 +292,7 @@ def apply_filters(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
                else calculate_fit_score(str(row["Sector"]), stage, region))
 
         qualifies = (
-            row["_from_existing"]  # always include existing research
+            row["_from_existing"]
             or (
                 stage in ("Series A", "Series B")
                 and fit >= 5
@@ -323,22 +311,55 @@ def apply_filters(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return qualifying, skipped
 
 
-# ── Notion push ───────────────────────────────────────────────────────────────
+# ── Supabase push ─────────────────────────────────────────────────────────────
 
-def push_to_notion(
+def _clean_str(val) -> str:
+    """Return empty string for NaN / None."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    return "" if s.lower() == "nan" else s
+
+
+def _clean_num(val):
+    """Return None for NaN / unparseable values."""
+    try:
+        import math
+        f = float(val)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    except (TypeError, ValueError):
+        return None
+
+
+def _clean_int(val):
+    """Return None for NaN / unparseable values."""
+    n = _clean_num(val)
+    return int(n) if n is not None else None
+
+
+def _clean_url(val) -> str:
+    """Normalize a URL string."""
+    link = _clean_str(val)
+    if not link:
+        return ""
+    if not link.startswith(("http://", "https://")):
+        link = "https://" + link
+    return link
+
+
+def push_to_supabase(
     df: pd.DataFrame,
-    notion: NotionHelper,
-    data_source_id: str,
+    db: SupabaseHelper,
     dry_run: bool = False,
 ) -> tuple[int, int]:
-    """Push qualifying companies to Notion. Returns (added, already_existed)."""
+    """Push qualifying companies to Supabase. Returns (added, already_existed)."""
     if dry_run:
-        console.print(f"  [dim][DRY RUN] Would push {len(df)} companies — skipping Notion API[/dim]")
+        console.print(f"  [dim][DRY RUN] Would push {len(df)} companies — skipping Supabase[/dim]")
         return len(df), 0
 
-    console.print("[bold]Checking existing entries in Notion…[/bold]")
-    existing_titles = notion.get_all_titles(data_source_id)
-    console.print(f"  Found {len(existing_titles)} existing companies in Notion")
+    console.print("[bold]Checking existing companies in Supabase…[/bold]")
+    existing = db.get_all_company_names()   # {lowercase_name: id}
+    console.print(f"  Found {len(existing)} existing companies")
 
     added = 0
     already_existed = 0
@@ -350,48 +371,48 @@ def push_to_notion(
         MofNCompleteColumn(),
         console=console,
     ) as progress:
-        task = progress.add_task("Pushing to Notion…", total=len(df))
+        task = progress.add_task("Pushing to Supabase…", total=len(df))
 
         for _, row in df.iterrows():
-            name = str(row["Company"]).strip()
+            name = _clean_str(row["Company"])
             name_lower = name.lower()
 
-            # Check for duplicate in Notion (exact or fuzzy)
+            # Check for existing (exact or fuzzy)
             is_existing = any(
                 fuzz.token_sort_ratio(name_lower, existing_name) >= FUZZY_THRESHOLD
-                for existing_name in existing_titles.keys()
+                for existing_name in existing.keys()
             )
             if is_existing:
                 already_existed += 1
                 progress.advance(task)
                 continue
 
-            notion_sectors = map_sector_to_notion(str(row["Sector"]))
-            region = row.get("_region", detect_region(str(row["HQ City"])))
-            stage = row.get("_stage", estimate_stage(row["Total Funding ($M)"]))
-            fit = int(row.get("_fit", 0))
+            sectors = normalize_sector(_clean_str(row["Sector"]))
+            stage   = row.get("_stage") or estimate_stage(row["Total Funding ($M)"])
+            fit     = int(row.get("_fit") or 0)
+            region  = row.get("_region") or detect_region(_clean_str(row["HQ City"]))
 
-            properties = {
-                "Name":               notion.title(name),
-                "Website":            notion.url(str(row.get("Website", ""))),
-                "Sector":             notion.multi_select(notion_sectors),
-                "HQ City":            notion.rich_text(str(row.get("HQ City", ""))),
-                "Total Funding ($M)": notion.number(row.get("Total Funding ($M)")),
-                "Stage Estimate":     notion.select(stage),
-                "Description":        notion.rich_text(str(row.get("Description", ""))[:2000]),
-                "Source":             notion.select(str(row.get("Source", "Bussgang USA"))),
-                "Fit Score":          notion.number(fit),
-                "Status":             notion.select("Not Started"),
-                "HBS Alumni at Company": notion.checkbox(False),
-                "2nd Time Founder":   notion.checkbox(False),
-                "VC Connection":      notion.checkbox(False),
-                "Gift Prepared":      notion.checkbox(False),
+            record = {
+                "name":                   name,
+                "website":                _clean_url(row.get("Website", "")) or None,
+                "sector":                 sectors,
+                "hq_city":                _clean_str(row.get("HQ City", "")) or None,
+                "total_funding_m":        _clean_num(row.get("Total Funding ($M)")),
+                "year_founded":           _clean_int(row.get("Year Founded")),
+                "stage_estimate":         stage,
+                "description":            _clean_str(row.get("Description", ""))[:2000] or None,
+                "source":                 _clean_str(row.get("Source", "")) or None,
+                "fit_score":              fit,
+                "status":                 "Not Started",
+                "hbs_alumni_at_company":  False,
+                "second_time_founder":    False,
+                "vc_connection":          False,
+                "gift_prepared":          False,
             }
-            if pd.notna(row.get("Year Founded")) and str(row.get("Year Founded", "")) not in ("", "nan"):
-                properties["Year Founded"] = notion.number(row["Year Founded"])
 
             try:
-                notion.create_page(data_source_id, properties)
+                db.insert_company(record)
+                existing[name_lower] = "pending"   # prevent same-run duplicates
                 added += 1
                 progress.update(task, description=f"[green]✓[/green] {name[:40]}")
             except Exception as e:
@@ -405,24 +426,24 @@ def push_to_notion(
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Filter companies and push to Notion")
+    parser = argparse.ArgumentParser(description="Filter companies and push to Supabase")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Preview results without writing to Notion")
+                        help="Preview results without writing to Supabase")
     parser.add_argument("--data-dir", default=None,
                         help="Path to data/ directory (default: auto-detect)")
     args = parser.parse_args()
 
     console.print(Panel.fit(
         "[bold blue]Company Filter Agent[/bold blue]\n"
-        "Loading CSVs → Scoring → Filtering → Notion",
+        "Loading CSVs → Scoring → Filtering → Supabase",
         border_style="blue",
     ))
     if args.dry_run:
-        console.print("[yellow]DRY RUN mode — no data will be written to Notion[/yellow]\n")
+        console.print("[yellow]DRY RUN mode — no data will be written to Supabase[/yellow]\n")
 
-    # Auto-detect data dir: check inside repo, then one level up (sibling of repo)
+    # Auto-detect data dir
     script_dir = Path(__file__).parent
-    repo_root = script_dir.parent
+    repo_root  = script_dir.parent
     candidates = [
         args.data_dir,
         str(repo_root / "data"),
@@ -430,15 +451,7 @@ def main():
     ]
     data_dir = next((p for p in candidates if p and os.path.isdir(p)), None)
     if not data_dir:
-        console.print(
-            f"[red]data/ directory not found. Pass --data-dir <path>[/red]"
-        )
-        raise SystemExit(1)
-
-    # Use data source ID (collection ID) — needed for notion-client v3 API
-    ds_id = os.getenv("NOTION_COMPANIES_DS_ID", "").strip()
-    if not ds_id and not args.dry_run:
-        console.print("[red]NOTION_COMPANIES_DS_ID not set in .env — run setup_notion.py first[/red]")
+        console.print("[red]data/ directory not found. Pass --data-dir <path>[/red]")
         raise SystemExit(1)
 
     # ── Step 1: Load ──────────────────────────────────────────────────────────
@@ -458,7 +471,6 @@ def main():
     console.print(f"  Qualifying (Series A/B, fit ≥ 5, USA/Canada + existing): [green]{len(qualifying)}[/green]")
     console.print(f"  Skipped (out of filter):                                   [dim]{len(skipped)}[/dim]")
 
-    # Preview table
     if len(qualifying) > 0:
         table = Table(title="Top qualifying companies (first 10)", show_lines=False)
         table.add_column("Company", style="bold")
@@ -478,14 +490,14 @@ def main():
             )
         console.print(table)
 
-    # ── Step 4: Push to Notion ────────────────────────────────────────────────
-    console.print("\n[bold]Step 4 — Pushing to Notion[/bold]")
-    notion = NotionHelper()
-    added, already_existed = push_to_notion(qualifying, notion, ds_id, dry_run=args.dry_run)
+    # ── Step 4: Push to Supabase ──────────────────────────────────────────────
+    console.print("\n[bold]Step 4 — Pushing to Supabase[/bold]")
+    db = SupabaseHelper()
+    added, already_existed = push_to_supabase(qualifying, db, dry_run=args.dry_run)
 
     # ── Summary ───────────────────────────────────────────────────────────────
     console.print(Panel.fit(
-        f"[green]✓ Added to Notion:[/green]    {added}\n"
+        f"[green]✓ Added to Supabase:[/green]  {added}\n"
         f"[yellow]↩ Already existed:[/yellow]  {already_existed}\n"
         f"[dim]✗ Skipped (filtered):[/dim] {len(skipped)}\n"
         f"[dim]~ Duplicates merged:[/dim]  {dup_count}",

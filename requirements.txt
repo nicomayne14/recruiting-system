@@ -3,8 +3,8 @@ python-dotenv>=1.0.0
 requests>=2.31.0
 pandas>=2.0.0
 
-# Notion API
-notion-client>=2.2.1
+# Supabase (replaces Notion)
+supabase>=2.3.0
 
 # Browser automation
 playwright>=1.40.0

@@ -2,7 +2,7 @@
 ### An AI-powered, agent-based recruiting pipeline built for systematic startup job searching
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Notion API](https://img.shields.io/badge/Notion-API-black?logo=notion)](https://developers.notion.com/)
+[![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL-green?logo=supabase)](https://supabase.com/)
 [![Claude API](https://img.shields.io/badge/Anthropic-Claude-orange)](https://www.anthropic.com/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-dashboard-red?logo=streamlit)](https://streamlit.io/)
 [![Playwright](https://img.shields.io/badge/Playwright-automation-green?logo=playwright)](https://playwright.dev/)
@@ -109,7 +109,7 @@ It's also a deliberate demonstration of how I think about problems: identify the
 
 | Layer | Technology | Why |
 |-------|-----------|-----|
-| CRM & storage | [Notion API](https://developers.notion.com/) | Relational databases, great UI, shareable views |
+| CRM & storage | [Supabase](https://supabase.com/) (PostgreSQL) | Reliable SQL backend, real-time, free tier, REST + Python client |
 | Browser automation | [Playwright](https://playwright.dev/python/) | Reliable async browser control for HBS + LinkedIn |
 | Research | [Perplexity API](https://docs.perplexity.ai/) | Real-time web search with source citations |
 | Outreach drafting | [Anthropic Claude API](https://www.anthropic.com/) | Best-in-class instruction following for tone matching |
@@ -159,7 +159,7 @@ Every company in the CRM is assigned to one of three outreach tiers, which deter
 
 ### Prerequisites
 - Python 3.11+
-- A Notion account + integration token ([create here](https://www.notion.so/my-integrations))
+- A [Supabase](https://supabase.com/) account (free tier is plenty)
 - Anthropic API key
 - Perplexity API key
 - HBS alumni directory credentials
@@ -189,14 +189,18 @@ cp .env.example .env
 ### Initialize (Phase 1)
 
 ```bash
-# 1. Create Notion databases
-python setup_notion.py
+# 1. Create Supabase tables
+#    → Copy the SQL printed by this command into Supabase → SQL Editor → Run
+python setup_supabase.py
 
-# 2. Filter and import companies from CSV lists
+# 2. Test your connection
+python setup_supabase.py   # (re-run; it tests tables after you create them)
+
+# 3. Filter and import companies from CSV lists
 # Add your CSVs to data/ following the format in data/sample/
 python agents/filter_companies.py
 
-# 3. Launch the dashboard
+# 4. Launch the dashboard
 streamlit run app.py
 ```
 
@@ -233,23 +237,23 @@ DEMO_MODE=true streamlit run app.py
 
 ---
 
-## Notion CRM Schema
+## Database Schema (Supabase / PostgreSQL)
 
-Four linked databases:
+Four linked tables:
 
 ```
-Companies ──< Contacts ──< Interactions
+companies ──< contacts ──< interactions
     │
-    └──< Applications
+    └──< applications
 ```
 
-**Companies:** Name · Sector · Funding · Stage Estimate · Fit Score · Outreach Tier · HBS Alumni Flag · 2nd-Time Founder Flag · Status · Next Action
+**companies:** name · website · sector (array) · hq_city · total_funding_m · stage_estimate · fit_score · outreach_tier · hbs_alumni_at_company · second_time_founder · status · next_action
 
-**Contacts:** Name · Role · Company (relation) · LinkedIn · HBS Alumni · Grad Year · Outreach Channel · Status
+**contacts:** name · role_title · company_id (FK) · linkedin_url · hbs_alumni · hbs_grad_year · outreach_tier · status · notes
 
-**Interactions:** Type · Company (relation) · Contact (relation) · Date · Message Sent · Response · Gift Prepared
+**interactions:** type · company_id (FK) · contact_id (FK) · date · message_sent · response · gift_prepared · followup_due · followup_sent
 
-**Applications:** Company (relation) · Role · Platform · Applied Date · Status · Follow-up Due
+**applications:** company_id (FK) · role · platform · applied_date · status · followup_due
 
 ---
 
@@ -268,9 +272,10 @@ Companies ──< Contacts ──< Interactions
 ## Project Status
 
 - [x] Architecture + spec finalized
-- [ ] Phase 1: Notion setup + company filtering
-- [ ] Phase 2: Contact research (HBS + LinkedIn)
-- [ ] Phase 3: Outreach drafting
+- [x] Backend migrated from Notion → Supabase (PostgreSQL)
+- [x] Phase 1: Supabase schema + company filtering agent
+- [x] Phase 2: Contact research agent (HBS alumni directory + 2nd-time founder detection)
+- [ ] Phase 3: Outreach drafting agent (Claude API)
 - [ ] Phase 4: Gmail parsing + follow-up automation
 - [ ] Full Streamlit UI
 
